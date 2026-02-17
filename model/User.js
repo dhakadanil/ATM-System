@@ -15,8 +15,10 @@ const userSchema = new mongoose.Schema({
         required: true,
         unique: true
     },
-
-    pin: String,
+pin: {
+   type: String,
+   required: true
+},
 
     balance: {
         type: Number,

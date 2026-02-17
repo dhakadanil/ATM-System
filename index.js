@@ -138,7 +138,7 @@ app.post("/verify-otp", async (req, res) => {
   await user.save();
 
   const token = jwt.sign(
-    { id: user._id },
+     { userId: user._id },
     process.env.JWT_SECRET,
     { expiresIn: "1h" }
   );
@@ -157,21 +157,35 @@ const authMiddleware = (req, res, next) => {
 
    try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      req.userId = decoded.id;
+
+      req.userId = decoded.userId;   // ✅ FIX HERE
+
       next();
    } catch (error) {
       return res.status(401).json({ message: "Invalid token" });
    }
 };
 
+
 // CHECK BALANCE
 app.post("/check-balance", authMiddleware, async (req, res) => {
    try {
-      const user = await User.findById(req.userId);
+      const { pin } = req.body;
 
-      if (!user) {
-         return res.status(404).json({ message: "User not found" });
-      }
+      const user = await User.findById(req.userId);
+if (!pin) {
+   return res.status(400).json({ message: "PIN is required" });
+}
+
+if (!user.pin) {
+   return res.status(500).json({ message: "User PIN not set in database" });
+}
+
+const isMatch = await bcrypt.compare(String(pin), user.pin);
+
+if (!isMatch) {
+   return res.status(401).json({ message: "Wrong PIN ❌" });
+}
 
       res.json({
          name: user.name,
@@ -185,43 +199,63 @@ app.post("/check-balance", authMiddleware, async (req, res) => {
 });
 
 
+
+
+// DEPOSIT
 // DEPOSIT
 app.post("/deposit", authMiddleware, async (req, res) => {
+  try {
 
-    try {
-        const { accountNumber, amount } = req.body;
-        const user = await User.findOne({ accountNumber });
-        if (!user) {
-            return res.status(404).json({ message: "User not found" });
+    const { amount } = req.body;
 
-        }
-        user.balance += Number(amount);
-        await user.save();
-           // save transaction
-        await Transaction.create({
-
-            accountNumber: accountNumber,
-            type: "deposit",
-            amount: amount,
-            balanceAfter: user.balance
-
-        });
-        res.send({
-            message: "Deposit successful",
-            balance: user.balance
-        });
-    } catch (error) {
-        res.send(error.message);
+    if (!amount || amount <= 0) {
+      return res.status(400).json({
+        message: "Invalid deposit amount"
+      });
     }
+
+    const user = await User.findById(req.userId);
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found"
+      });
+    }
+
+    // Update balance
+    user.balance += Number(amount);
+    await user.save();
+
+    // Save transaction in MongoDB
+    await Transaction.create({
+      accountNumber: user.accountNumber,
+      type: "deposit",
+      amount: Number(amount),
+      balanceAfter: user.balance
+    });
+
+    res.status(200).json({
+      message: "Deposit successful ✅",
+      totalBalance: user.balance
+    });
+
+  } catch (error) {
+    console.log("Deposit Error:", error);
+    res.status(500).json({
+      message: "Server Error"
+    });
+  }
 });
+
+
 
 
 // WITHDRAW
 app.post("/withdraw", authMiddleware, async (req, res) => {
 
     try {
-        const { accountNumber, pin, amount } = req.body;
-        const user = await User.findOne({ accountNumber });
+        const { pin, amount } = req.body;
+           const user = await User.findById(req.userId);
         if (!user) {
             return res.json({
                 message: "Account not found"
@@ -244,7 +278,7 @@ if (!isMatch) {
         await user.save();
                 // save transaction
         await Transaction.create({
-            accountNumber: accountNumber,
+    accountNumber: user.accountNumber,
             type: "withdraw",
             amount: amount,
             balanceAfter: user.balance
@@ -253,7 +287,7 @@ if (!isMatch) {
         // Custom response
         res.json({
             message: `Withdraw ${amount} successful`,
-            accountNumber: accountNumber,
+           accountNumber: user.accountNumber,
             availableBalance: user.balance
         });
     } catch (error) {
