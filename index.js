@@ -26,7 +26,7 @@ const transporter = nodemailer.createTransport({
 });
 
 
-
+// MongoDB Connect 
 mongoose.connect("mongodb://127.0.0.1:27017/atm_system")
 .then(() => {
     console.log("MongoDB Connected Successfully");
@@ -201,7 +201,7 @@ if (!isMatch) {
 
 
 
-// DEPOSIT
+
 // DEPOSIT
 app.post("/deposit", authMiddleware, async (req, res) => {
   try {
