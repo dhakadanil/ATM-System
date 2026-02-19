@@ -8,6 +8,9 @@ const app = express();
 
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+
+
+
 app.use(cors(
     {
   origin: "http://localhost:3000",
@@ -26,7 +29,7 @@ const transporter = nodemailer.createTransport({
 });
 
 
-// MongoDB Connect 
+// MongoDB Connect  System
 mongoose.connect("mongodb://127.0.0.1:27017/atm_system")
 .then(() => {
     console.log("MongoDB Connected Successfully");
@@ -37,7 +40,7 @@ mongoose.connect("mongodb://127.0.0.1:27017/atm_system")
 
 
 
-// REGISTER
+// REGISTER System 
 app.post("/register", async (req, res) => {
 
     try {
@@ -81,7 +84,7 @@ const user = new User({
 
 
 
-
+//  Login System
 app.post("/login", async (req, res) => {
   const { email, accountNumber } = req.body;
   const user = await User.findOne({ email, accountNumber });
@@ -167,7 +170,7 @@ const authMiddleware = (req, res, next) => {
 };
 
 
-// CHECK BALANCE
+// CHECK BALANCE System
 app.post("/check-balance", authMiddleware, async (req, res) => {
    try {
       const { pin } = req.body;
@@ -202,7 +205,7 @@ if (!isMatch) {
 
 
 
-// DEPOSIT
+// DEPOSIT system
 app.post("/deposit", authMiddleware, async (req, res) => {
   try {
 
@@ -250,7 +253,7 @@ app.post("/deposit", authMiddleware, async (req, res) => {
 
 
 
-// WITHDRAW
+// WITHDRAW system 
 app.post("/withdraw", authMiddleware, async (req, res) => {
 
     try {
