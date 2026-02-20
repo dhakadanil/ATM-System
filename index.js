@@ -314,7 +314,7 @@ app.get("/transaction/:accountNumber", authMiddleware, async (req, res) => {
 });
 
 
-// server start karo
+// Server Start 
 app.listen(5000, () => {
  console.log("JWT Secret:", process.env.JWT_SECRET);
 
