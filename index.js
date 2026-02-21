@@ -2,320 +2,300 @@ require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
-const User = require('./model/User');
-const Transaction = require('./model/Transaction');
-const app = express();
-
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-
-
-
-app.use(cors(
-    {
-  origin: "http://localhost:3000",
-  credentials: true
-    }
-));
-app.use(express.json());
 const nodemailer = require("nodemailer");
-const transporter = nodemailer.createTransport({
- service: "gmail",
-    auth: {
-        user: process.env.EMAIL,
-        pass: process.env.EMAIL_PASS
-    }
 
-});
+const User = require("./model/User");
+const Transaction = require("./model/Transaction");
 
+const app = express();
 
-// MongoDB Connect  System
+/* -------------------- MIDDLEWARE -------------------- */
+app.use(cors({ origin: "http://localhost:3000", credentials: true }));
+app.use(express.json());
+
+/* -------------------- DATABASE -------------------- */
 mongoose.connect("mongodb://127.0.0.1:27017/atm_system")
-.then(() => {
-    console.log("MongoDB Connected Successfully");
-})
-.catch((error) => {
-    console.log("MongoDB Connection Failed:", error);
+  .then(() => console.log("MongoDB Connected ✅"))
+  .catch(err => console.log("DB Error:", err));
+
+/* -------------------- MAIL SETUP -------------------- */
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: { user: process.env.EMAIL, pass: process.env.EMAIL_PASS }
 });
 
+/* -------------------- COMMON HELPERS -------------------- */
 
+const generateOTP = () =>
+  Math.floor(100000 + Math.random() * 900000).toString();
 
-// REGISTER System 
+const sendEmail = async (to, subject, text) => {
+  await transporter.sendMail({
+    from: process.env.EMAIL,
+    to,
+    subject,
+    text
+  });
+};
+
+const verifyOTP = (user, otp) => {
+  if (!user.otp) return "No OTP requested";
+  if (user.otp !== otp) return "Invalid OTP";
+  if (Date.now() > user.otpExpiry) return "OTP expired";
+  return null;
+};
+
+const auth = (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(" ")[1];
+    if (!token) return res.status(401).json({ message: "No token" });
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.userId = decoded.userId;
+    next();
+  } catch {
+    res.status(401).json({ message: "Invalid token" });
+  }
+};
+
+const updatePin = async (user, newPin) => {
+  user.pin = await bcrypt.hash(newPin, 10);
+  user.otp = null;
+  user.otpExpiry = null;
+  user.isOtpVerified = false;
+  await user.save();
+};
+
+/* -------------------- REGISTER -------------------- */
 app.post("/register", async (req, res) => {
+  try {
+    const { name, email, accountNumber, pin } = req.body;
 
-    try {
+    if (!name || !email || !accountNumber || !pin)
+      return res.status(400).json({ message: "All fields required" });
 
-        const { name, email, accountNumber, pin } = req.body;
+    if (await User.findOne({ accountNumber }))
+      return res.status(400).json({ message: "Account exists" });
 
-        // check accountNumber already exists
-        const existingUser = await User.findOne({ accountNumber });
+    if (await User.findOne({ email }))
+      return res.status(400).json({ message: "Email exists" });
 
-        if (existingUser) {
-            return res.send("Account Number already exists");
-        }
+    await User.create({
+      name,
+      email,
+      accountNumber,
+      pin: await bcrypt.hash(pin, 10),
+      balance: 0,
+      isOtpVerified: false
+    });
 
-        // check email already exists
-        const existingEmail = await User.findOne({ email });
+    res.json({ message: "Account Registered Successfully ✅" });
 
-        if (existingEmail) {
-            return res.send("Email already registered");
-        }
-
-      const hashedPin = await bcrypt.hash(pin, 10);
-
-const user = new User({
-   name,
-   email,
-   accountNumber,
-   pin: hashedPin
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
-        await user.save();
-
-        res.send("Account Registered Successfully");
-
-    } catch (error) {
-
-        res.send(error.message);
-
-    }
-
-});
-
-
-
-//  Login System
+/* -------------------- LOGIN -------------------- */
 app.post("/login", async (req, res) => {
   const { email, accountNumber } = req.body;
+
   const user = await User.findOne({ email, accountNumber });
+  if (!user)
+    return res.status(400).json({ message: "Invalid credentials" });
 
-  if (!user) {
-    return res.status(400).json({ message: "Email or Account Number Invalid" });
-  }
-
-  // generate OTP
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  user.otp = otp;
+  user.otp = generateOTP();
   user.otpExpiry = Date.now() + 5 * 60 * 1000;
   await user.save();
 
-  // send email
-  await transporter.sendMail({
-    from: process.env.EMAIL,
-    to: email,
-    subject: "ATM Login OTP",
-    text: `Your OTP is ${otp}`
-  });
-console.log(`Generated OTP for ${email}: ${otp}`);
-  // ✅ Send JSON instead of plain text
-  res.json({ message: "OTP sent to email" });
+  await sendEmail(email, "ATM Login OTP", `Your OTP is ${user.otp}`);
+
+  res.json({ message: "OTP sent" });
 });
 
-
+/* -------------------- VERIFY LOGIN OTP -------------------- */
 app.post("/verify-otp", async (req, res) => {
   const { email, otp } = req.body;
-
   const user = await User.findOne({ email });
 
-  if (!user) {
+  if (!user)
     return res.status(400).json({ message: "User not found" });
-  }
 
-  // Ensure OTP exists
-  if (!user.otp) {
-    return res.status(400).json({ message: "No OTP requested or already used" });
-  }
+  const error = verifyOTP(user, otp);
+  if (error)
+    return res.status(400).json({ message: error });
 
-  // Trim both sides for safety
-  if (user.otp.trim() !== otp.trim()) {
-    return res.status(400).json({ message: "Invalid OTP" });
-  }
-
-  // Check expiry
-  if (Date.now() > user.otpExpiry) {
-    return res.status(400).json({ message: "OTP expired" });
-  }
-  // OTP verified → clear it
   user.otp = null;
   user.otpExpiry = null;
   await user.save();
 
   const token = jwt.sign(
-     { userId: user._id },
+    { userId: user._id },
     process.env.JWT_SECRET,
     { expiresIn: "1h" }
   );
-  res.json({ message: "Login Successful", token });
+
+  res.json({ message: "Login Successful ✅", token });
 });
 
+/* -------------------- FORGOT PIN -------------------- */
+app.post("/forgot-pin", async (req, res) => {
+  const { email, accountNumber } = req.body;
 
-const authMiddleware = (req, res, next) => {
-   const header = req.headers.authorization;
+  const user = await User.findOne({ email, accountNumber });
+  if (!user)
+    return res.status(400).json({ message: "Invalid details" });
 
-   if (!header) {
-      return res.status(401).json({ message: "No token provided" });
-   }
+  user.otp = generateOTP();
+  user.otpExpiry = Date.now() + 5 * 60 * 1000;
+  user.isOtpVerified = false;
+  await user.save();
 
-   const token = header.split(" ")[1];
+  await sendEmail(email, "Forgot PIN OTP", `Your OTP is ${user.otp}`);
 
-   try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-      req.userId = decoded.userId;   // ✅ FIX HERE
-
-      next();
-   } catch (error) {
-      return res.status(401).json({ message: "Invalid token" });
-   }
-};
-
-
-// CHECK BALANCE System
-app.post("/check-balance", authMiddleware, async (req, res) => {
-   try {
-      const { pin } = req.body;
-
-      const user = await User.findById(req.userId);
-if (!pin) {
-   return res.status(400).json({ message: "PIN is required" });
-}
-
-if (!user.pin) {
-   return res.status(500).json({ message: "User PIN not set in database" });
-}
-
-const isMatch = await bcrypt.compare(String(pin), user.pin);
-
-if (!isMatch) {
-   return res.status(401).json({ message: "Wrong PIN ❌" });
-}
-
-      res.json({
-         name: user.name,
-         accountNumber: user.accountNumber,
-         balance: user.balance
-      });
-
-   } catch (error) {
-      res.status(500).json({ message: error.message });
-   }
+  res.json({ message: "OTP sent" });
 });
 
+/* -------------------- VERIFY FORGOT OTP -------------------- */
+app.post("/verify-forgot-otp", async (req, res) => {
+  const { email, otp } = req.body;
 
+  const user = await User.findOne({ email });
+  if (!user)
+    return res.status(400).json({ message: "User not found" });
 
+  const error = verifyOTP(user, otp);
+  if (error)
+    return res.status(400).json({ message: error });
 
+  user.isOtpVerified = true;
+  await user.save();
 
-// DEPOSIT system
-app.post("/deposit", authMiddleware, async (req, res) => {
-  try {
-
-    const { amount } = req.body;
-
-    if (!amount || amount <= 0) {
-      return res.status(400).json({
-        message: "Invalid deposit amount"
-      });
-    }
-
-    const user = await User.findById(req.userId);
-
-    if (!user) {
-      return res.status(404).json({
-        message: "User not found"
-      });
-    }
-
-    // Update balance
-    user.balance += Number(amount);
-    await user.save();
-
-    // Save transaction in MongoDB
-    await Transaction.create({
-      accountNumber: user.accountNumber,
-      type: "deposit",
-      amount: Number(amount),
-      balanceAfter: user.balance
-    });
-
-    res.status(200).json({
-      message: "Deposit successful ✅",
-      totalBalance: user.balance
-    });
-
-  } catch (error) {
-    console.log("Deposit Error:", error);
-    res.status(500).json({
-      message: "Server Error"
-    });
-  }
+  res.json({ message: "OTP Verified ✅" });
 });
 
+/* -------------------- SET NEW PIN -------------------- */
+app.post("/set-new-pin", async (req, res) => {
+  const { email, newPin } = req.body;
 
+  const user = await User.findOne({ email });
+  if (!user || !user.isOtpVerified)
+    return res.status(403).json({ message: "OTP not verified" });
 
+  await updatePin(user, newPin);
 
-// WITHDRAW system 
-app.post("/withdraw", authMiddleware, async (req, res) => {
+  res.json({ message: "PIN Changed Successfully ✅" });
+});
 
-    try {
-        const { pin, amount } = req.body;
-           const user = await User.findById(req.userId);
-        if (!user) {
-            return res.json({
-                message: "Account not found"
-            });
-        }
-   const isMatch = await bcrypt.compare(pin, user.pin);
-if (!isMatch) {
-   return res.status(401).json({
-      message: "Invalid PIN"
-   });
-}
-        if (user.balance < amount) {
-            return res.json({
-                message: "Insufficient balance",
-                availableBalance: user.balance
-            });
-        }
-        // withdraw
-        user.balance = user.balance - amount;
-        await user.save();
-                // save transaction
-        await Transaction.create({
+/* -------------------- RESET PIN (Logged In) -------------------- */
+app.post("/send-reset-otp", auth, async (req, res) => {
+  const { oldPin } = req.body;
+
+  const user = await User.findById(req.userId);
+
+  if (!(await bcrypt.compare(oldPin, user.pin)))
+    return res.status(401).json({ message: "Old PIN incorrect" });
+
+  user.otp = generateOTP();
+  user.otpExpiry = Date.now() + 5 * 60 * 1000;
+  await user.save();
+
+  await sendEmail(user.email, "Reset PIN OTP", `Your OTP is ${user.otp}`);
+
+  res.json({ message: "OTP sent" });
+});
+
+app.post("/reset-pin", auth, async (req, res) => {
+  const { otp, newPin } = req.body;
+
+  const user = await User.findById(req.userId);
+
+  const error = verifyOTP(user, otp);
+  if (error)
+    return res.status(400).json({ message: error });
+
+  await updatePin(user, newPin);
+
+  res.json({ message: "PIN Reset Successful ✅" });
+});
+
+/* -------------------- CHECK BALANCE -------------------- */
+app.post("/check-balance", auth, async (req, res) => {
+  const { pin } = req.body;
+  const user = await User.findById(req.userId);
+
+  if (!(await bcrypt.compare(pin, user.pin)))
+    return res.status(401).json({ message: "Wrong PIN" });
+
+  res.json({
+    name: user.name,
     accountNumber: user.accountNumber,
-            type: "withdraw",
-            amount: amount,
-            balanceAfter: user.balance
-        });
-
-        // Custom response
-        res.json({
-            message: `Withdraw ${amount} successful`,
-           accountNumber: user.accountNumber,
-            availableBalance: user.balance
-        });
-    } catch (error) {
-        res.json({
-            message: error.message
-        });
-    }
+    balance: user.balance
+  });
 });
 
+/* -------------------- DEPOSIT -------------------- */
+app.post("/deposit", auth, async (req, res) => {
+  const { amount } = req.body;
+  if (!amount || amount <= 0)
+    return res.status(400).json({ message: "Invalid amount" });
 
-app.get("/transaction/:accountNumber", authMiddleware, async (req, res) => {
+  const user = await User.findById(req.userId);
+  user.balance += Number(amount);
+  await user.save();
 
-    try {
-        const accountNumber = req.params.accountNumber;
-        const transactions = await Transaction.find({ accountNumber })
-            .sort({ date: -1 });
-        res.json(transactions);
-    } catch (error) {
-        res.send(error.message);
-    }
+  await Transaction.create({
+    accountNumber: user.accountNumber,
+    type: "deposit",
+    amount,
+    balanceAfter: user.balance
+  });
+
+  res.json({ message: "Deposit successful ✅", balance: user.balance });
 });
 
+/* -------------------- WITHDRAW -------------------- */
+app.post("/withdraw", auth, async (req, res) => {
+  const { pin, amount } = req.body;
 
-// Server Start 
+  if (!amount || amount <= 0)
+    return res.status(400).json({ message: "Invalid amount" });
+
+  const user = await User.findById(req.userId);
+
+  if (!(await bcrypt.compare(pin, user.pin)))
+    return res.status(401).json({ message: "Invalid PIN" });
+
+  if (user.balance < amount)
+    return res.status(400).json({ message: "Insufficient balance" });
+
+  user.balance -= amount;
+  await user.save();
+
+  await Transaction.create({
+    accountNumber: user.accountNumber,
+    type: "withdraw",
+    amount,
+    balanceAfter: user.balance
+  });
+
+  res.json({ message: "Withdraw successful ✅", balance: user.balance });
+});
+
+/* -------------------- TRANSACTION HISTORY -------------------- */
+app.get("/transaction", auth, async (req, res) => {
+  const user = await User.findById(req.userId);
+
+  const transactions = await Transaction
+    .find({ accountNumber: user.accountNumber })
+    .sort({ date: -1 });
+
+  res.json(transactions);
+});
+
+/* -------------------- SERVER -------------------- */
 app.listen(5000, () => {
- console.log("JWT Secret:", process.env.JWT_SECRET);
-
+  console.log("Server running on port 5000 🚀");
 });
