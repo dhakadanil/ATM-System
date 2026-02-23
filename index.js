@@ -5,12 +5,11 @@ const cors = require("cors");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
-
 const User = require("./model/User");
 const Transaction = require("./model/Transaction");
 
-const app = express();
 
+const app = express();
 /* -------------------- MIDDLEWARE -------------------- */
 app.use(cors({ origin: "http://localhost:3000", credentials: true }));
 app.use(express.json());
@@ -68,6 +67,7 @@ const updatePin = async (user, newPin) => {
   await user.save();
 };
 
+// start route
 /* -------------------- REGISTER -------------------- */
 app.post("/register", async (req, res) => {
   try {
@@ -161,21 +161,16 @@ app.post("/forgot-pin", async (req, res) => {
 /* -------------------- VERIFY FORGOT OTP -------------------- */
 app.post("/verify-forgot-otp", async (req, res) => {
   const { email, otp } = req.body;
-
   const user = await User.findOne({ email });
   if (!user)
     return res.status(400).json({ message: "User not found" });
-
   const error = verifyOTP(user, otp);
   if (error)
     return res.status(400).json({ message: error });
-
   user.isOtpVerified = true;
   await user.save();
-
   res.json({ message: "OTP Verified ✅" });
 });
-
 /* -------------------- SET NEW PIN -------------------- */
 app.post("/set-new-pin", async (req, res) => {
   const { email, newPin } = req.body;
@@ -295,7 +290,7 @@ app.get("/transaction", auth, async (req, res) => {
   res.json(transactions);
 });
 
-/* -------------------- SERVER -------------------- */
+/* ----------------- SERVER -------------------- */
 app.listen(5000, () => {
   console.log("Server running on port 5000 🚀");
 });
