@@ -58,7 +58,7 @@ const auth = (req, res, next) => {
     res.status(401).json({ message: "Invalid token" });
   }
 };
-
+// update pin code 
 const updatePin = async (user, newPin) => {
   user.pin = await bcrypt.hash(newPin, 10);
   user.otp = null;
