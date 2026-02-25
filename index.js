@@ -54,6 +54,7 @@ const auth = (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.userId = decoded.userId;
     next();
+    console.log("JWT_SECRET in auth:", process.env.JWT_SECRET);
   } catch {
     res.status(401).json({ message: "Invalid token" });
   }
@@ -110,8 +111,11 @@ app.post("/login", async (req, res) => {
   user.otpExpiry = Date.now() + 5 * 60 * 1000;
   await user.save();
 
+
+
   await sendEmail(email, "ATM Login OTP", `Your OTP is ${user.otp}`);
 
+ 
   res.json({ message: "OTP sent" });
 });
 
@@ -161,27 +165,52 @@ app.post("/forgot-pin", async (req, res) => {
 /* -------------------- VERIFY FORGOT OTP -------------------- */
 app.post("/verify-forgot-otp", async (req, res) => {
   const { email, otp } = req.body;
+
   const user = await User.findOne({ email });
   if (!user)
     return res.status(400).json({ message: "User not found" });
+
   const error = verifyOTP(user, otp);
   if (error)
     return res.status(400).json({ message: error });
+
   user.isOtpVerified = true;
+  user.otp = null;
+  user.otpExpiry = null;
+
   await user.save();
+
   res.json({ message: "OTP Verified ✅" });
 });
 /* -------------------- SET NEW PIN -------------------- */
 app.post("/set-new-pin", async (req, res) => {
-  const { email, newPin } = req.body;
+  try {
+    const { email, newPin } = req.body;
 
-  const user = await User.findOne({ email });
-  if (!user || !user.isOtpVerified)
-    return res.status(403).json({ message: "OTP not verified" });
+    if (!email || !newPin)
+      return res.status(400).json({ message: "All fields required" });
 
-  await updatePin(user, newPin);
+    if (newPin.length !== 4)
+      return res.status(400).json({ message: "PIN must be 4 digits" });
 
-  res.json({ message: "PIN Changed Successfully ✅" });
+    const user = await User.findOne({
+      email: email.toLowerCase()
+    });
+
+    if (!user)
+      return res.status(404).json({ message: "User not found" });
+
+    if (!user.isOtpVerified)
+      return res.status(403).json({ message: "OTP not verified" });
+
+    await updatePin(user, newPin);
+
+    res.json({ message: "PIN Changed Successfully ✅" });
+
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
 /* -------------------- RESET PIN (Logged In) -------------------- */
@@ -218,37 +247,79 @@ app.post("/reset-pin", auth, async (req, res) => {
 
 /* -------------------- CHECK BALANCE -------------------- */
 app.post("/check-balance", auth, async (req, res) => {
-  const { pin } = req.body;
-  const user = await User.findById(req.userId);
+  try {
+    console.log("UserID from token:", req.userId);
 
-  if (!(await bcrypt.compare(pin, user.pin)))
-    return res.status(401).json({ message: "Wrong PIN" });
+    const { pin } = req.body;
+    const user = await User.findById(req.userId);
 
-  res.json({
-    name: user.name,
-    accountNumber: user.accountNumber,
-    balance: user.balance
-  });
+    console.log("User found:", user);
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const match = await bcrypt.compare(pin, user.pin);
+
+    if (!match) {
+      return res.status(401).json({ message: "Wrong PIN" });
+    }
+
+    res.json({
+      name: user.name,
+      accountNumber: user.accountNumber,
+     balance: user.balance 
+    });
+
+  } catch (err) {
+    console.log("ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
-
 /* -------------------- DEPOSIT -------------------- */
 app.post("/deposit", auth, async (req, res) => {
-  const { amount } = req.body;
-  if (!amount || amount <= 0)
-    return res.status(400).json({ message: "Invalid amount" });
+  try {
+    const { amount } = req.body;
 
-  const user = await User.findById(req.userId);
-  user.balance += Number(amount);
-  await user.save();
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ message: "Invalid amount" });
+    }
 
-  await Transaction.create({
-    accountNumber: user.accountNumber,
-    type: "deposit",
-    amount,
-    balanceAfter: user.balance
-  });
+    const user = await User.findById(req.userId);
 
-  res.json({ message: "Deposit successful ✅", balance: user.balance });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // ✅ Pehle ka balance store
+    const previousBalance = user.balance;
+
+    // ✅ Deposit add
+    user.balance += Number(amount);
+
+    await user.save();
+
+    // ✅ Transaction save
+    await Transaction.create({
+      accountNumber: user.accountNumber,
+      type: "deposit",
+      amount: Number(amount),
+      balanceAfter: user.balance
+    });
+
+    // ✅ Proper response
+    res.json({
+     message: "Deposit successful ✅",
+      previousBalance: previousBalance,
+      depositedAmount: Number(amount),
+      totalBalance: user.balance
+
+    });
+
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ message: "Server Error" });
+  }
 });
 
 /* -------------------- WITHDRAW -------------------- */
@@ -266,6 +337,8 @@ app.post("/withdraw", auth, async (req, res) => {
   if (user.balance < amount)
     return res.status(400).json({ message: "Insufficient balance" });
 
+  const previousBalance = user.balance;
+
   user.balance -= amount;
   await user.save();
 
@@ -276,18 +349,29 @@ app.post("/withdraw", auth, async (req, res) => {
     balanceAfter: user.balance
   });
 
-  res.json({ message: "Withdraw successful ✅", balance: user.balance });
+  res.json({  message: "Withdraw successful ✅",
+    withdrawnAmount: Number(amount),   // 🔥 kitna nikala
+    previousBalance: previousBalance,       // 🔥 pehle kitna tha
+    totalBalance: user.balance  });
 });
 
 /* -------------------- TRANSACTION HISTORY -------------------- */
 app.get("/transaction", auth, async (req, res) => {
-  const user = await User.findById(req.userId);
+  try {
+    const user = await User.findById(req.userId);
 
-  const transactions = await Transaction
-    .find({ accountNumber: user.accountNumber })
-    .sort({ date: -1 });
+    if (!user)
+      return res.status(404).json({ message: "User not found" });
 
-  res.json(transactions);
+    const transactions = await Transaction
+      .find({ accountNumber: user.accountNumber })
+      .sort({ date: -1 });
+
+    res.json(transactions);
+
+  } catch (error) {
+    res.status(500).json({ message: "Server Error" });
+  }
 });
 
 /* ----------------- SERVER -------------------- */
