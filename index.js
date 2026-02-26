@@ -55,9 +55,13 @@ const auth = (req, res, next) => {
     req.userId = decoded.userId;
     next();
     console.log("JWT_SECRET in auth:", process.env.JWT_SECRET);
-  } catch {
-    res.status(401).json({ message: "Invalid token" });
+  } catch (error) {
+  if (error.name === "TokenExpiredError") {
+    return res.status(401).json({ message: "Token expired, please login again" });
   }
+
+  return res.status(401).json({ message: "Invalid token" });
+}
 };
 // update pin code 
 const updatePin = async (user, newPin) => {
@@ -138,7 +142,7 @@ app.post("/verify-otp", async (req, res) => {
   const token = jwt.sign(
     { userId: user._id },
     process.env.JWT_SECRET,
-    { expiresIn: "1h" }
+    { expiresIn: "7d" }
   );
 
   res.json({ message: "Login Successful ✅", token });
@@ -148,7 +152,7 @@ app.post("/verify-otp", async (req, res) => {
 app.post("/forgot-pin", async (req, res) => {
   const { email, accountNumber } = req.body;
 
-  const user = await User.findOne({ email, accountNumber });
+  const user = await User.findOne({ email: email.toLowerCase(), accountNumber });
   if (!user)
     return res.status(400).json({ message: "Invalid details" });
 
@@ -166,7 +170,8 @@ app.post("/forgot-pin", async (req, res) => {
 app.post("/verify-forgot-otp", async (req, res) => {
   const { email, otp } = req.body;
 
-  const user = await User.findOne({ email });
+  const user = await User.findOne({   email: email.toLowerCase()
+ });
   if (!user)
     return res.status(400).json({ message: "User not found" });
 
@@ -175,10 +180,10 @@ app.post("/verify-forgot-otp", async (req, res) => {
     return res.status(400).json({ message: error });
 
   user.isOtpVerified = true;
+  await user.save();
   user.otp = null;
   user.otpExpiry = null;
 
-  await user.save();
 
   res.json({ message: "OTP Verified ✅" });
 });
@@ -206,7 +211,8 @@ app.post("/set-new-pin", async (req, res) => {
     await updatePin(user, newPin);
 
     res.json({ message: "PIN Changed Successfully ✅" });
-
+console.log("User Found:", user.email);
+console.log("isOtpVerified:", user.isOtpVerified);
   } catch (error) {
     console.log(error);
     res.status(500).json({ message: "Server error" });
@@ -232,17 +238,39 @@ app.post("/send-reset-otp", auth, async (req, res) => {
 });
 
 app.post("/reset-pin", auth, async (req, res) => {
-  const { otp, newPin } = req.body;
+  try {
+    const { otp, newPin } = req.body;
 
-  const user = await User.findById(req.userId);
+    if (!otp || !newPin) {
+      return res.status(400).json({ message: "OTP and New PIN required" });
+    }
 
-  const error = verifyOTP(user, otp);
-  if (error)
-    return res.status(400).json({ message: error });
+    const user = await User.findById(req.userId);
 
-  await updatePin(user, newPin);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
 
-  res.json({ message: "PIN Reset Successful ✅" });
+    // Verify OTP
+    const error = verifyOTP(user, otp);
+    if (error) {
+      return res.status(400).json({ message: error });
+    }
+
+    // Update PIN
+    await updatePin(user, newPin);
+
+    // Clear OTP after success
+    user.otp = undefined;
+    user.otpExpiry = undefined;
+    await user.save();
+
+    res.json({ message: "PIN Reset Successful ✅" });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server Error" });
+  }
 });
 
 /* -------------------- CHECK BALANCE -------------------- */

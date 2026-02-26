@@ -25,6 +25,10 @@ pin: {
         default: 0
     },
 
+    isOtpVerified: {
+  type: Boolean,
+  default: false
+},
     otp: String,
 
     otpExpiry: Date
