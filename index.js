@@ -45,7 +45,7 @@ const verifyOTP = (user, otp) => {
   if (Date.now() > user.otpExpiry) return "OTP expired";
   return null;
 };
-
+// Auth System
 const auth = (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(" ")[1];
@@ -236,7 +236,7 @@ app.post("/send-reset-otp", auth, async (req, res) => {
 
   res.json({ message: "OTP sent" });
 });
-
+// Reset Pin
 app.post("/reset-pin", auth, async (req, res) => {
   try {
     const { otp, newPin } = req.body;
